@@ -1,0 +1,139 @@
+---
+title: "Practical Machine Learning Assignment"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Synopsis
+
+We will try to predict how well an exercise has been performed, using data from wearable fitness devices.
+
+# Results
+
+## Preparation
+```{r}
+library(ggplot2)
+library(caret)
+library(dplyr)
+raw_training <- read.csv('pml-training.csv')
+testing <- read.csv('pml-testing.csv')
+training <- raw_training[,-(1:7)]
+testing <- testing[,-(1:7)]
+```
+
+Looking at the data we see that the first few variables are metadata, hence we removed them.
+Also some of the variables have not been loaded as numerics properly. We remedy this
+```{r,warning = FALSE}
+y <- training$classe
+training <- training[,-ncol(training)]
+training <- data.frame(apply(training,2,as.numeric),classe=y)
+testing <- data.frame(apply(testing,2,as.numeric))
+```
+Next we check if some columns are basically empty and remove them
+```{r}
+basically_empty <- function(df){
+    res <- c()
+    for (k in 1:ncol(df))
+        if (class(df[[k]])=="numeric"){
+            if (sum(df[[k]],na.rm=TRUE) == 0){
+                res <- c(res,k)
+            }
+        }
+    res
+}
+to_remove <- basically_empty(training)
+training <- training[,-to_remove]
+testing <- testing[,-to_remove]
+```
+
+## Training models
+We now fit a random forest, look at the variable importance, remove variables and see if it improves performance on the validation set.
+```{r}
+set.seed(123)
+rfAll <- 
+    train(data=training, classe~., method="rf", na.action=na.omit)
+```
+
+```{r}
+plot(varImp(rfAll))
+```
+
+Even though one cannot make out the names of the variables from eyeballing it, it seems that importance seems to drop drastically somewhere between 20 and 30.
+
+So let us extract the columns with an importance over 30.
+```{r}
+important_variables <- names(training[,-144])[varImp(rfAll)$importance>30]
+length(important_variables)
+```
+Checking the testing set we see that various columns of important variables are completely empty. We therefore remove these variables
+```{r}
+missing_in_testing <- names(testing)[basically_empty(testing)]
+remaining <- setdiff(important_variables,missing_in_testing)
+length(remaining)
+```
+Before we train our final model we use the mean to impute (i.e. fill the missing data).
+```{r}
+remTest <- subset(testing,select=c(remaining,"problem_id"))
+remTrain <- subset(training,select=c(remaining,"classe"))
+
+
+for (k in 1:ncol(remTrain[,-ncol(remTrain)])){
+    m <- mean(remTrain[[k]],na.rm=TRUE)
+    remTrain[[k]][is.na(remTrain[[k]])] <- m
+}
+```
+
+
+Now we train a random forest and a boosting classifier. We chose these two methods because the are very general and very accurate. I tried to train the models on the whole dataset but it took multiple hours, so I am taking the liberty of using a smaller subset.
+
+```{r}
+set.seed(456)
+N=1000
+train_for_rf <- remTrain[sample(1:nrow(remTrain),N),]
+train_for_gbm <- remTrain[sample(1:nrow(remTrain),N),]
+rfImp <- 
+    train(data=train_for_rf, classe~., method="rf")
+gbmImp <- 
+    train(data=train_for_gbm, classe~., method="gbm", verbose=FALSE)
+```
+
+```{r}
+set.seed(789)
+rfPred <- predict(rfImp, newdata=training)
+gbmPred <- predict(gbmImp, newdata=training)
+temp <- training$classe
+preds <- data.frame(rf=rfPred,gbm=gbmPred,classe=temp)
+combinedFit <- train(data=preds,classe~rf+gbm,method="rf")
+```
+
+## Predict on the testing data
+With the combined data we know predict on the testing set
+```{r}
+rfTestPred <- predict(rfImp,newdata=remTest)
+gbmTestPred <- predict(gbmImp,newdata=remTest)
+predsTest <- data.frame(rf=rfTestPred,gbm=gbmTestPred)
+combinedPred <- predict(combinedFit,newdata=predsTest)
+combinedPred
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
