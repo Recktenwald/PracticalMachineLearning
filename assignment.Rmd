@@ -20,6 +20,7 @@ raw_training <- read.csv('pml-training.csv')
 testing <- read.csv('pml-testing.csv')
 training <- raw_training[,-(1:7)]
 testing <- testing[,-(1:7)]
+training$classe <- as.factor(training$classe)
 ```
 
 Looking at the data we see that the first few variables are metadata, hence we removed them.
@@ -59,12 +60,12 @@ rfAll <-
 plot(varImp(rfAll))
 ```
 
-Even though one cannot make out the names of the variables from eyeballing it, it seems that importance seems to drop drastically somewhere between 20 and 30.
+Even though one cannot make out the names of the variables from eyeballing it, it seems that importance seems to drop drastically somewhere around 40
 
-So let us extract the columns with an importance over 30.
+So let us extract the columns with an importance over 35.
 ```{r}
-important_variables <- names(training[,-144])[varImp(rfAll)$importance>30]
-length(important_variables)
+important_variables <- names(training[,-144])[varImp(rfAll)$importance>35]
+length(important_variables) # it is a coincidence that it is also 35 :D
 ```
 Checking the testing set we see that various columns of important variables are completely empty. We therefore remove these variables
 ```{r}
@@ -89,9 +90,15 @@ Now we train a random forest and a boosting classifier. We chose these two metho
 
 ```{r}
 set.seed(456)
-N=1000
-train_for_rf <- remTrain[sample(1:nrow(remTrain),N),]
-train_for_gbm <- remTrain[sample(1:nrow(remTrain),N),]
+N=5000
+rows_for_rf <- sample(1:nrow(remTrain),N)
+train_for_rf <- remTrain[rows_for_rf,]
+rows_for_gbm <- sample(setdiff(1:nrow(remTrain),rows_for_rf),N)
+train_for_gbm <- remTrain[rows_for_gbm,]
+rows_for_validation <- setdiff(setdiff(1:nrow(remTrain),rows_for_rf),rows_for_gbm)
+# Note that we train the rf and gbm on different rows
+# In particular the combined model has seen 10000 rows in total
+# And that this leaves us with a big validation set
 rfImp <- 
     train(data=train_for_rf, classe~., method="rf")
 gbmImp <- 
@@ -100,12 +107,29 @@ gbmImp <-
 
 ```{r}
 set.seed(789)
-rfPred <- predict(rfImp, newdata=training)
-gbmPred <- predict(gbmImp, newdata=training)
-temp <- training$classe
+# Predict on the whole set except for the validation
+# Then train the combined model
+rfPred <- predict(rfImp, newdata=training[-rows_for_validation,])
+gbmPred <- predict(gbmImp, newdata=training[-rows_for_validation,])
+temp <- training[-rows_for_validation,]$classe
 preds <- data.frame(rf=rfPred,gbm=gbmPred,classe=temp)
 combinedFit <- train(data=preds,classe~rf+gbm,method="rf")
 ```
+
+Next we test the model on some unseen data.
+
+```{r}
+validate <- remTrain[rows_for_validation,]
+rfValPred <- predict(rfImp,newdata=validate)
+gbmValPred <- predict(gbmImp,newdata=validate)
+valPreds <- data.frame(rf=rfValPred,gbm=gbmValPred)
+combinedPred <- predict(combinedFit,newdata=valPreds)
+confusionMatrix(combinedPred,validate$classe)
+```
+We see that we have above 90% out of sample accuracy, even by training on a subset.
+
+
+
 
 ## Predict on the testing data
 With the combined data we know predict on the testing set
@@ -113,7 +137,7 @@ With the combined data we know predict on the testing set
 rfTestPred <- predict(rfImp,newdata=remTest)
 gbmTestPred <- predict(gbmImp,newdata=remTest)
 predsTest <- data.frame(rf=rfTestPred,gbm=gbmTestPred)
-combinedPred <- predict(combinedFit,newdata=predsTest)
+combinedTestPred <- predict(combinedFit,newdata=predsTest)
 combinedPred
 ```
 
